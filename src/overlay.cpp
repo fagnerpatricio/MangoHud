@@ -280,11 +280,11 @@ void create_fonts(const overlay_params& params, ImFont*& small_font, ImFont*& te
    // ImGui takes ownership of the data, no need to free it
    if (!params.font_file.empty() && file_exists(params.font_file)) {
       io.Fonts->AddFontFromFileTTF(params.font_file.c_str(), font_size, nullptr, same_font && same_size ? glyph_ranges.Data : default_range);
-      small_font = io.Fonts->AddFontFromFileTTF(params.font_file.c_str(), font_size * 0.55f, nullptr, default_range);
+      //small_font = io.Fonts->AddFontFromFileTTF(params.font_file.c_str(), font_size * 0.55f, nullptr, default_range);
    } else {
       const char* ttf_compressed_base85 = GetDefaultCompressedFontDataTTFBase85();
       io.Fonts->AddFontFromMemoryCompressedBase85TTF(ttf_compressed_base85, font_size, nullptr, default_range);
-      small_font = io.Fonts->AddFontFromMemoryCompressedBase85TTF(ttf_compressed_base85, font_size * 0.55f, nullptr, default_range);
+      //small_font = io.Fonts->AddFontFromMemoryCompressedBase85TTF(ttf_compressed_base85, font_size * 0.55f, nullptr, default_range);
    }
 
    auto font_file_text = params.font_file_text;
@@ -296,7 +296,14 @@ void create_fonts(const overlay_params& params, ImFont*& small_font, ImFont*& te
    else
       text_font = io.Fonts->Fonts[0];
 
+   //io.Fonts->TexGlyphPadding = 15;
    io.Fonts->Build();
+
+   ImFont *small_font_ = IM_NEW(ImFont)(*io.Fonts->Fonts[0]);
+   small_font_->Scale = 0.55f;
+   small_font = small_font_;
+   io.Fonts->Fonts.push_back(small_font_);
+
 }
 
 static VkLayerInstanceCreateInfo *get_instance_chain_info(const VkInstanceCreateInfo *pCreateInfo,
@@ -796,7 +803,7 @@ void check_keybinds(struct swapchain_stats& sw_stats, struct overlay_params& par
          reload_cfg_press = now;
       }
    }
-   
+
    if (params.permit_upload && elapsedUpload >= keyPressDelay){
 #ifdef HAVE_X11
       pressed = keys_are_pressed(params.upload_log);
@@ -807,7 +814,7 @@ void check_keybinds(struct swapchain_stats& sw_stats, struct overlay_params& par
          last_upload_press = now;
          logger->upload_last_log();
       }
-   }   
+   }
 }
 
 void calculate_benchmark_data(){
@@ -1111,6 +1118,11 @@ void render_benchmark(swapchain_stats& data, struct overlay_params& params, ImVe
    ImGui::End();
 }
 
+struct render_mode
+{
+   int mode;
+} render_mode [] { {0}, {1} };
+
 void render_imgui(swapchain_stats& data, struct overlay_params& params, ImVec2& window_size, bool is_vulkan)
 {
    ImGui::GetIO().FontGlobalScale = params.font_scale;
@@ -1124,6 +1136,7 @@ void render_imgui(swapchain_stats& data, struct overlay_params& params, ImVec2& 
 
    if (!params.no_display){
       ImGui::Begin("Main", &open, ImGuiWindowFlags_NoDecoration);
+      ImGui::GetWindowDrawList()->AddCallback(nullptr, &render_mode[1]);
       if (params.enabled[OVERLAY_PARAM_ENABLED_version]){
          ImGui::Text("%s", MANGOHUD_VERSION);
          ImGui::Dummy(ImVec2(0, 8.0f));
@@ -1366,10 +1379,12 @@ void render_imgui(swapchain_stats& data, struct overlay_params& params, ImVec2& 
                                  NULL, min_time, max_time,
                                  ImVec2(ImGui::GetContentRegionAvailWidth() - params.font_size * params.font_scale * 2.2, 50));
          } else {
+            ImGui::GetWindowDrawList()->AddCallback(nullptr, &render_mode[0]);
             ImGui::PlotLines(hash, get_time_stat, &data,
                      ARRAY_SIZE(data.frames_stats), 0,
                      NULL, min_time, max_time,
                      ImVec2(ImGui::GetContentRegionAvailWidth() - params.font_size * params.font_scale * 2.2, 50));
+            ImGui::GetWindowDrawList()->AddCallback(nullptr, &render_mode[1]);
          }
          ImGui::PopStyleColor();
       }
@@ -1396,6 +1411,22 @@ void render_imgui(swapchain_stats& data, struct overlay_params& params, ImVec2& 
       if((now - logger->last_log_end()) < 12s)
          render_benchmark(data, params, window_size, height, now);
    }
+
+#if 0
+   ImGui::SetNextWindowBgAlpha(params.background_alpha);
+   auto dsz = ImGui::GetIO().DisplaySize;
+   //auto atlas = &font_atlas_text;
+   auto atlas = ImGui::GetIO().Fonts->Fonts[0]->ContainerAtlas;
+   float scale = 1; //atlas->TexHeight/512.f;
+   auto img_pos = ImVec2(dsz.x - atlas->TexWidth/scale - 25.f, dsz.y - 512 - 25.f);
+   auto img_size = ImVec2(atlas->TexWidth/scale + 20.f, 512 + 20.f);
+   ImGui::SetNextWindowPos(img_pos, ImGuiCond_Always);
+   ImGui::SetNextWindowSize(img_size, ImGuiCond_Always);
+   ImGui::Begin("Font Atlas", nullptr, ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration);
+   ImGui::GetWindowDrawList()->AddCallback(nullptr, &render_mode[1]);
+   ImGui::Image(atlas->TexID, ImVec2(atlas->TexWidth/scale, atlas->TexHeight/scale));
+   ImGui::End();
+#endif
 }
 
 static void compute_swapchain_display(struct swapchain_data *data)
@@ -1811,6 +1842,11 @@ static struct overlay_draw *render_swapchain_display(struct swapchain_data *data
                                        VK_SHADER_STAGE_VERTEX_BIT,
                                        sizeof(float) * 2, sizeof(float) * 2, translate);
 
+   int render_mode = 1;
+   device_data->vtable.CmdPushConstants(draw->command_buffer, data->pipeline_layout,
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    sizeof(float) * 4, sizeof(int) * 1, &render_mode);
+
    // Render the command lists:
    int vtx_offset = 0;
    int idx_offset = 0;
@@ -1821,6 +1857,13 @@ static struct overlay_draw *render_swapchain_display(struct swapchain_data *data
       for (int cmd_i = 0; cmd_i < cmd_list->CmdBuffer.Size; cmd_i++)
       {
          const ImDrawCmd* pcmd = &cmd_list->CmdBuffer[cmd_i];
+         if (pcmd->UserCallbackData) {
+            render_mode = ((struct render_mode*)pcmd->UserCallbackData)->mode;
+            //std::cerr << "UserCallbackData: " << render_mode << "\n";
+            device_data->vtable.CmdPushConstants(draw->command_buffer, data->pipeline_layout,
+                                 VK_SHADER_STAGE_FRAGMENT_BIT,
+                                 sizeof(float) * 4, sizeof(int) * 1, &render_mode);
+         }
          // Apply scissor/clipping rectangle
          // FIXME: We could clamp width/height based on clamped min/max values.
          VkRect2D scissor;
@@ -2005,15 +2048,18 @@ static void setup_swapchain_data_pipeline(struct swapchain_data *data)
    /* Constants: we are using 'vec2 offset' and 'vec2 scale' instead of a full
     * 3d projection matrix
     */
-   VkPushConstantRange push_constants[1] = {};
+   VkPushConstantRange push_constants[2] = {};
    push_constants[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
    push_constants[0].offset = sizeof(float) * 0;
    push_constants[0].size = sizeof(float) * 4;
+   push_constants[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+   push_constants[1].offset = push_constants[0].offset + push_constants[0].size;
+   push_constants[1].size = sizeof(int) * 1;
    VkPipelineLayoutCreateInfo layout_info = {};
    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
    layout_info.setLayoutCount = 1;
    layout_info.pSetLayouts = &data->descriptor_layout;
-   layout_info.pushConstantRangeCount = 1;
+   layout_info.pushConstantRangeCount = 2;
    layout_info.pPushConstantRanges = push_constants;
    VK_CHECK(device_data->vtable.CreatePipelineLayout(device_data->device,
                                                      &layout_info,
@@ -2486,7 +2532,7 @@ static VkResult overlay_QueuePresentKHR(
    }
 
    using namespace std::chrono_literals;
-   
+
    if (fps_limit_stats.targetFrameTime > 0s){
       fps_limit_stats.frameStart = Clock::now();
       FpsLimiter(fps_limit_stats);
